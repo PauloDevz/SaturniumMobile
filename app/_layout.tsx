@@ -2,10 +2,13 @@ import "@/global.css";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { Stack } from "expo-router";
 import { StatusBar } from "expo-status-bar";
+import * as SplashScreen from "expo-splash-screen";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { GestureHandlerRootView } from "react-native-gesture-handler";
 import "react-native-reanimated";
 import { Platform } from "react-native";
+
+void SplashScreen.preventAutoHideAsync().catch(() => {});
 import "@/lib/_core/nativewind-pressable";
 import { ThemeProvider } from "@/lib/theme-provider";
 import {
@@ -36,6 +39,16 @@ export default function RootLayout() {
   // Initialize Manus runtime for cookie injection from parent container
   useEffect(() => {
     initManusRuntime();
+
+    const fallback = setTimeout(() => {
+      void SplashScreen.hideAsync().catch(() => {});
+    }, 6000);
+
+    return () => clearTimeout(fallback);
+  }, []);
+
+  const handleRootLayout = useCallback(() => {
+    void SplashScreen.hideAsync().catch(() => {});
   }, []);
 
   const handleSafeAreaUpdate = useCallback((metrics: Metrics) => {
@@ -79,7 +92,7 @@ export default function RootLayout() {
   }, [initialInsets, initialFrame]);
 
   const content = (
-    <GestureHandlerRootView style={{ flex: 1 }}>
+    <GestureHandlerRootView style={{ flex: 1 }} onLayout={handleRootLayout}>
       <trpc.Provider client={trpcClient} queryClient={queryClient}>
         <QueryClientProvider client={queryClient}>
           {/* Default to hiding native headers so raw route segments don't appear (e.g. "(tabs)", "products/[id]"). */}

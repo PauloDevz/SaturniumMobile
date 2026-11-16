@@ -62,12 +62,7 @@ const config: ExpoConfig & { logoUrl: string } = {
   name: env.appName,
   slug: env.appSlug,
   version: "1.0.0",
-  extra: {
-  ...publicRuntime,
-  eas: {
-    projectId: "ee72bee4-7d87-43c3-9447-d756330a4c39"
-  }
-},
+  extra: publicRuntime,
   orientation: "portrait",
   icon: "./assets/images/icon.png",
   scheme: env.scheme,
