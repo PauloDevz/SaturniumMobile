@@ -16,7 +16,7 @@ const COLORS = {
 };
 
 const BrowserPage = forwardRef<BrowserPageHandle, BrowserPageProps>(function BrowserPage(
-  { tabId, sourceUrl, active, onNavigationStateChange, onLoadProgress },
+  { tabId, sourceUrl, active, suspended, cache, onNavigationStateChange, onLoadProgress },
   forwardedRef,
 ) {
   const webView = useRef<WebView>(null);
@@ -25,6 +25,7 @@ const BrowserPage = forwardRef<BrowserPageHandle, BrowserPageProps>(function Bro
     goBack: () => webView.current?.goBack(),
     goForward: () => webView.current?.goForward(),
     reload: () => webView.current?.reload(),
+    releaseMemory: () => webView.current?.clearCache?.(false),
   }));
 
   const navigationChanged = useCallback(
@@ -51,7 +52,7 @@ const BrowserPage = forwardRef<BrowserPageHandle, BrowserPageProps>(function Bro
     return false;
   }, []);
 
-  if (!sourceUrl) return null;
+  if (!sourceUrl || suspended) return null;
 
   return (
     <View
@@ -72,6 +73,7 @@ const BrowserPage = forwardRef<BrowserPageHandle, BrowserPageProps>(function Bro
         javaScriptEnabled
         domStorageEnabled
         cacheEnabled
+        cacheMode={cache === "prefer-cache" ? "LOAD_CACHE_ELSE_NETWORK" : "LOAD_DEFAULT"}
         allowsBackForwardNavigationGestures
         setSupportMultipleWindows={false}
         startInLoadingState

@@ -15,6 +15,7 @@ const BrowserPage = forwardRef<BrowserPageHandle, BrowserPageProps>(function Bro
     goBack: () => undefined,
     goForward: () => undefined,
     reload: () => undefined,
+    releaseMemory: () => undefined,
   }));
 
   useEffect(() => {

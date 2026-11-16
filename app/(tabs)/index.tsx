@@ -16,7 +16,13 @@ import {
   View,
 } from "react-native";
 import type { ImageStyle, TextStyle, ViewStyle } from "react-native";
+import { router } from "expo-router";
 import { SafeAreaView, useSafeAreaInsets } from "react-native-safe-area-context";
+
+import { selectTabsToSuspend } from "@/lib/browser/memory-manager";
+import { useEffectivePolicy } from "@/lib/browser/settings";
+import { publishTabStats } from "@/lib/browser/tab-stats";
+import { readSnapshot } from "@/modules/saturnium-metrics";
 
 import BrowserPage from "@/components/browser-page";
 import type {
@@ -48,6 +54,9 @@ type BrowserTab = {
   canGoForward: boolean;
   loading: boolean;
   progress: number;
+  suspended: boolean;
+  pinned: boolean;
+  lastActiveAt: number;
 };
 
 function createTab(): BrowserTab {
@@ -60,6 +69,9 @@ function createTab(): BrowserTab {
     canGoForward: false,
     loading: false,
     progress: 0,
+    suspended: false,
+    pinned: false,
+    lastActiveAt: Date.now(),
   };
 }
 
@@ -116,6 +128,68 @@ export default function BrowserScreen() {
   const [showTabs, setShowTabs] = useState(false);
   const pages = useRef<Record<string, BrowserPageHandle | null>>({});
   const addressInput = useRef<TextInput>(null);
+  const policy = useEffectivePolicy();
+  const tabsRef = useRef(tabs);
+  tabsRef.current = tabs;
+  const closedTabs = useRef<BrowserTab[]>([]);
+
+  // Aba que entra em foco é restaurada (WebView remontado na URL preservada); ao sair, registra o instante.
+  useEffect(() => {
+    setTabs(current =>
+      current.map(tab =>
+        tab.id === activeTabId && tab.suspended ? { ...tab, suspended: false, loading: !!tab.sourceUrl } : tab,
+      ),
+    );
+    return () => {
+      const leaving = activeTabId;
+      setTabs(current => current.map(tab => (tab.id === leaving ? { ...tab, lastActiveAt: Date.now() } : tab)));
+    };
+  }, [activeTabId]);
+
+  // Suspensão automática: avalia a política periodicamente (nunca a aba ativa, fixadas ou carregando).
+  useEffect(() => {
+    const tick = () => {
+      const now = Date.now();
+      let effective = policy;
+      if (policy.memorySaver && readSnapshot()?.lowMemory) effective = { ...policy, maxLiveTabs: 1 };
+      const ids = selectTabsToSuspend(
+        tabsRef.current.map(t => ({
+          id: t.id,
+          hasPage: !!t.sourceUrl,
+          suspended: t.suspended,
+          pinned: t.pinned,
+          lastActiveAt: t.lastActiveAt,
+          busy: t.loading,
+        })),
+        activeTabId,
+        effective,
+        now,
+      );
+      if (ids.length === 0) return;
+      if (policy.memorySaver || policy.cache === "minimal") {
+        ids.forEach(id => pages.current[id]?.releaseMemory());
+      }
+      setTabs(current =>
+        current.map(tab =>
+          ids.includes(tab.id)
+            ? { ...tab, suspended: true, sourceUrl: tab.currentUrl ?? tab.sourceUrl, canGoBack: false, canGoForward: false, loading: false, progress: 0 }
+            : tab,
+        ),
+      );
+    };
+    const id = setInterval(tick, 10_000);
+    tick();
+    return () => clearInterval(id);
+  }, [policy, activeTabId]);
+
+  useEffect(() => {
+    const suspended = tabs.filter(t => t.suspended).length;
+    publishTabStats({
+      open: tabs.length,
+      suspended,
+      live: tabs.filter(t => t.sourceUrl && !t.suspended).length,
+    });
+  }, [tabs]);
 
   const activeTab = useMemo(
     () => tabs.find(tab => tab.id === activeTabId) ?? tabs[0],
@@ -163,6 +237,8 @@ export default function BrowserScreen() {
   const closeTab = useCallback(
     (tabId: string) => {
       const index = tabs.findIndex(tab => tab.id === tabId);
+      const closing = tabs[index];
+      if (closing?.sourceUrl) closedTabs.current = [closing, ...closedTabs.current].slice(0, 10);
       const remaining = tabs.filter(tab => tab.id !== tabId);
       const nextTabs = remaining.length > 0 ? remaining : [createTab()];
       setTabs(nextTabs);
@@ -174,6 +250,42 @@ export default function BrowserScreen() {
     },
     [activeTabId, tabs],
   );
+
+  const togglePin = useCallback((tabId: string) => {
+    setTabs(current => current.map(t => (t.id === tabId ? { ...t, pinned: !t.pinned } : t)));
+  }, []);
+
+  const duplicateTab = useCallback((tabId: string) => {
+    const source = tabsRef.current.find(t => t.id === tabId);
+    if (!source?.sourceUrl) return;
+    const copy: BrowserTab = {
+      ...createTab(),
+      sourceUrl: source.currentUrl ?? source.sourceUrl,
+      currentUrl: source.currentUrl ?? source.sourceUrl,
+      title: source.title,
+      loading: true,
+      progress: 0.04,
+    };
+    setTabs(current => [...current, copy]);
+    setActiveTabId(copy.id);
+    setShowTabs(false);
+  }, []);
+
+  const closeOtherTabs = useCallback((keepId: string) => {
+    const closing = tabsRef.current.filter(t => t.id !== keepId && !t.pinned);
+    closedTabs.current = [...closing.filter(t => t.sourceUrl), ...closedTabs.current].slice(0, 10);
+    setTabs(current => current.filter(t => t.id === keepId || t.pinned));
+  }, []);
+
+  const restoreClosedTab = useCallback(() => {
+    const [last, ...rest] = closedTabs.current;
+    if (!last) return;
+    closedTabs.current = rest;
+    const restored: BrowserTab = { ...last, suspended: false, loading: true, progress: 0.04, lastActiveAt: Date.now() };
+    setTabs(current => [...current, restored]);
+    setActiveTabId(restored.id);
+    setShowTabs(false);
+  }, []);
 
   const navigate = useCallback(
     (rawValue: string) => {
@@ -266,14 +378,24 @@ export default function BrowserScreen() {
               <Text style={styles.brandCaption}>BROWSER</Text>
             </View>
           </View>
-          <Pressable
-            accessibilityRole="button"
-            accessibilityLabel="Abrir nova aba"
-            onPress={openNewTab}
-            style={({ pressed }) => [styles.headerButton, pressed && styles.pressed]}
-          >
-            <Ionicons name="add" size={25} color={C.text} />
-          </Pressable>
+          <View style={styles.headerActions}>
+            <Pressable
+              accessibilityRole="button"
+              accessibilityLabel="Abrir desempenho e configurações"
+              onPress={() => router.push("/settings")}
+              style={({ pressed }) => [styles.headerButton, pressed && styles.pressed]}
+            >
+              <Ionicons name="speedometer-outline" size={21} color={C.text} />
+            </Pressable>
+            <Pressable
+              accessibilityRole="button"
+              accessibilityLabel="Abrir nova aba"
+              onPress={openNewTab}
+              style={({ pressed }) => [styles.headerButton, pressed && styles.pressed]}
+            >
+              <Ionicons name="add" size={25} color={C.text} />
+            </Pressable>
+          </View>
         </View>
 
         <View style={[styles.addressBar, addressFocused && styles.addressBarFocused]}>
@@ -376,6 +498,8 @@ export default function BrowserScreen() {
               tabId={tab.id}
               sourceUrl={tab.sourceUrl}
               active={tab.id === activeTabId}
+              suspended={tab.suspended}
+              cache={policy.cache}
               onNavigationStateChange={updateNavigation}
               onLoadProgress={updateProgress}
             />
@@ -481,9 +605,31 @@ export default function BrowserScreen() {
                         </Text>
                         <Text numberOfLines={1} style={styles.tabCardUrl}>
                           {siteCaption(item.currentUrl || item.sourceUrl)}
+                          {item.suspended ? "  ·  suspensa" : ""}
+                          {item.pinned ? "  ·  fixada" : ""}
                         </Text>
                       </View>
                     </Pressable>
+                    <Pressable
+                      accessibilityRole="button"
+                      accessibilityLabel={item.pinned ? "Desafixar aba" : "Fixar aba"}
+                      onPress={() => togglePin(item.id)}
+                      hitSlop={6}
+                      style={styles.tabClose}
+                    >
+                      <Ionicons name={item.pinned ? "pin" : "pin-outline"} size={18} color={item.pinned ? C.cyan : C.muted} />
+                    </Pressable>
+                    {item.sourceUrl ? (
+                      <Pressable
+                        accessibilityRole="button"
+                        accessibilityLabel="Duplicar aba"
+                        onPress={() => duplicateTab(item.id)}
+                        hitSlop={6}
+                        style={styles.tabClose}
+                      >
+                        <Ionicons name="copy-outline" size={18} color={C.muted} />
+                      </Pressable>
+                    ) : null}
                     <Pressable
                       accessibilityRole="button"
                       accessibilityLabel={`Fechar aba ${tabCaption(item)}`}
@@ -497,6 +643,14 @@ export default function BrowserScreen() {
                 );
               }}
             />
+            <View style={styles.sheetActions}>
+              <Pressable accessibilityRole="button" onPress={() => activeTab && closeOtherTabs(activeTab.id)} style={styles.sheetAction}>
+                <Text style={styles.sheetActionText}>Fechar outras</Text>
+              </Pressable>
+              <Pressable accessibilityRole="button" onPress={restoreClosedTab} style={styles.sheetAction}>
+                <Text style={styles.sheetActionText}>Reabrir fechada</Text>
+              </Pressable>
+            </View>
             <Pressable
               accessibilityRole="button"
               onPress={openNewTab}
@@ -574,6 +728,30 @@ const styles = {
     fontWeight: "700",
     letterSpacing: 2.4,
     marginTop: 2,
+  },
+  headerActions: {
+    flexDirection: "row",
+    gap: 8,
+  },
+  sheetActions: {
+    flexDirection: "row",
+    gap: 8,
+    marginTop: 2,
+  },
+  sheetAction: {
+    flex: 1,
+    height: 40,
+    alignItems: "center",
+    justifyContent: "center",
+    borderRadius: 12,
+    borderWidth: 1,
+    borderColor: C.border,
+    backgroundColor: C.surface,
+  },
+  sheetActionText: {
+    color: C.text,
+    fontSize: 12,
+    fontWeight: "600",
   },
   headerButton: {
     width: 38,

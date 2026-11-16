@@ -8,3 +8,13 @@
 ## Estado observado
 
 A implementação TypeScript compila (`pnpm check`) e o lint passa (`pnpm lint`). A configuração Expo pública resolve nome, identificador Android e `logoUrl`. O servidor Metro/Web respondeu HTTP 200 na porta 8081 e a API está em escuta na 3000 (HTTP 404 em `/` é esperado para uma rota não definida). A WebView nativa está implementada no código, mas não foi executada em aparelho nem foi produzido APK/AAB nesta sessão. `expo install --check` alertou que alguns pacotes fixados pelo starter estão abaixo das versões esperadas pela CLI; a atualização automática em massa foi recusada para preservar o starter fornecido.
+
+## Pendências da evolução (ver docs/LIMITACOES.md)
+
+- [ ] Extensões: exigem migração para GeckoView (o WebView não suporta).
+- [ ] Downloads.
+- [ ] Navegação privada.
+- [ ] Configurações gerais, de aparência e de privacidade.
+- [ ] Miniaturas de abas.
+- [x] Pré-carregamento e atividade em segundo plano: removidos (inviáveis no WebView).
+- Limitações aceitas: sem memória por aba; aba suspensa perde o histórico voltar/avançar (URL mantida).

@@ -47,3 +47,18 @@ O Preview Web demonstra a interface e o fallback Web. Para abrir o app nativo em
 ## Referência de origem
 
 O navegador desktop de referência é o repositório [Jeffin-PVP/SaturniumBrowser](https://github.com/Jeffin-PVP/SaturniumBrowser). O ícone foi derivado do arquivo `assets/saturniumbrowser-icon.png` do checkout desktop e adaptado para os assets nativos do Expo.
+
+## Desempenho e gerenciamento de memória (etapa 1)
+
+- `lib/browser/performance-modes.ts`: 5 modos (Equilibrado, Alto desempenho, Economia de memória, Economia de bateria, Personalizado) como políticas.
+- `lib/browser/memory-manager.ts`: decide quais abas suspender (nunca a ativa, fixadas ou carregando). Suspender desmonta o WebView e mantém a URL; a aba volta a carregar ao ser aberta. O histórico de voltar/avançar da aba é perdido ao suspender.
+- `app/settings.tsx`: painel "Desempenho" (modos, regras, métricas).
+- `modules/saturnium-metrics`: módulo Expo em Kotlin com `ActivityManager.MemoryInfo`, `Debug.MemoryInfo` (PSS), processos do app e tempo de CPU do processo. Sem o módulo (Expo Go, Web), o painel diz "indisponível"; nada é estimado.
+- O módulo exige build nativo (`npx expo prebuild` + build Android); não funciona no Expo Go.
+
+### Limitações documentadas
+- **Extensões:** `react-native-webview` não suporta extensões e o Chrome do Android não as expõe a apps. Suporte real exige migrar para GeckoView (WebExtensions). Não implementado nesta etapa.
+- **Memória por aba:** o WebView não expõe consumo individual por página.
+- **Pré-carregamento de páginas/links e atividade em segundo plano:** não oferecidos, pois não há como implementá-los de verdade no WebView.
+- **Ainda não implementados:** downloads, navegação privada, configurações gerais/aparência/privacidade, miniaturas de abas.
+- **Não validado em aparelho:** o código Kotlin e a tela nunca foram compilados nem executados; sem `node_modules`/rede aqui, também não rodei `pnpm check`, `lint` nem `vitest`.
